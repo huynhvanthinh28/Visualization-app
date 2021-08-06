@@ -1,0 +1,174 @@
+from PyQt5 import QtWidgets, QtCore, uic
+from PyQt5.QtWidgets import QApplication, QMainWindow, QTableView, QFileDialog, QMessageBox
+from PyQt5.QtGui import QStandardItemModel, QStandardItem
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT as NavigationToolbar
+from matplotlib.figure import Figure
+import seaborn as sns
+import matplotlib.pyplot as plt
+import pandas as pd
+import sys
+import platform
+
+op_sys = platform.system()
+if op_sys == 'Darwin':
+    from Foundation import NSURL
+
+class PandasModel(QtCore.QAbstractTableModel): 
+    def __init__(self, df = pd.DataFrame(), parent=None): 
+        QtCore.QAbstractTableModel.__init__(self, parent=parent)
+        self._df = df
+
+    def headerData(self, section, orientation, role=QtCore.Qt.DisplayRole):
+        if role != QtCore.Qt.DisplayRole:
+            return QtCore.QVariant()
+        if orientation == QtCore.Qt.Horizontal:
+            try:
+                return self._df.columns.tolist()[section]
+            except (IndexError, ):
+                return QtCore.QVariant()
+        return super(PandasModel, self).headerData(section, orientation, role)
+
+    def data(self, index, role=QtCore.Qt.DisplayRole):
+        if role != QtCore.Qt.DisplayRole:
+            return QtCore.QVariant()
+        if not index.isValid():
+            return QtCore.QVariant()
+        if index.row() == 0:
+            return QtCore.QVariant(self._df.columns.values[index.column()])
+        return QtCore.QVariant(str(self._df.iloc[index.row()-1, index.column()]))
+
+    def setData(self, index, value, role):
+        if index.row() == 0:
+            if isinstance(value, QtCore.QVariant):
+                value = value.value()
+            if hasattr(value, 'toPyObject'):
+                value = value.toPyObject()
+            self._df.columns.values[index.column()] = value
+            self.headerDataChanged.emit(QtCore.Qt.Horizontal, index.column(), index.column())
+        else:
+            col = self._df.columns[index.column()]
+            row = self._df.index[index.row()]
+            if isinstance(value, QtCore.QVariant):
+                value = value.value()
+            if hasattr(value, 'toPyObject'):
+                value = value.toPyObject()
+            else:
+                dtype = self._df[col].dtype
+            if dtype != object:
+                value = None if value == '' else dtype.type(value)
+                self._df.set_value(row, col, value)
+        return True
+
+    def rowCount(self, parent=QtCore.QModelIndex()): 
+        return len(self._df.index)+1 
+
+    def columnCount(self, parent=QtCore.QModelIndex()): 
+        return len(self._df.columns)
+
+
+
+class Visualization(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        fig,ax = plt.subplots()
+        self.window = None
+        uic.loadUi('visualization.ui',self)
+        self.pushButton.clicked.connect(self.getfile)
+        self.pushButton_2.clicked.connect(self.apply)
+        self.pushButton_4.clicked.connect(self.plot)
+        style = ['dark', 'darkgrid', 'white', 'whitegrid', 'ticks']
+        self.comboBox_4.addItems(style)
+        self.setAcceptDrops(True)
+        self.figure = plt.figure(figsize = (5,4),dpi=120)
+        self.canvas = FigureCanvas(self.figure)
+        
+
+
+    def getfile(self):
+        self.filename = QFileDialog.getOpenFileName(self, caption = 'Open file', directory=".", filter="All Files (*.*)")[0]
+        print(self.filename)
+        if self.filename !=(''):
+            self.readData()
+        else:
+        	QMessageBox.about(self, 'Error', 'YOU HAVE NOT SELECTED FILE')
+    def readData(self):
+        self.df = pd.read_csv(self.filename, encoding='utf-8').fillna(0)
+        self.data = self.df.sort_index()
+        self.model_1 = QStandardItemModel(len(self.data.axes[1]), len(self.data.axes[0]))
+        self.model_1.setHorizontalHeaderLabels(self.data.columns)
+        self.data = self.data.sort_index()
+        self.model_1 = PandasModel(self.data)
+        self.tableView.setModel(self.model_1)
+        for i in range(self.model_1.columnCount()):
+            ix = self.model_1.index(-1, i)
+            self.tableView.openPersistentEditor(ix)
+        stylesheet = "::section{Background-color:rgb(192,192,192);}"
+        self.tableView.verticalHeader().setStyleSheet(stylesheet)
+        self.tableView.horizontalHeader().setStyleSheet(stylesheet)
+
+
+    def dragEnterEvent(self,e):
+        if e.mimeData().hasUrls:
+            e.accept()
+        else:
+            e.ignore()
+    def dragMoveEvent(self,e):
+        if e.mimeData().hasUrls:
+            e.accept()
+        else:
+            e.ignore()
+    def dropEvent(self,e):
+        if e.mimeData().hasUrls:
+            e.setDropAction(QtCore.Qt.CopyAction)
+            e.accept()
+            for url in e.mimeData().urls():
+                if op_sys == 'Darwin':
+                    fname = str(NSURL.URLWithString_(str(url.toSTring())).filePathURL().path())
+                else:
+                    fname = str(url.toLocalFile())
+            self.filename = fname
+            print(self.filename)
+            self.readData()
+        else:
+            e.ignore()
+
+    def apply(self):
+        #self.figure = plt.figure(figsize = (5,4),dpi=120)
+        #self.canvas = FigureCanvas(self.figure)
+        self.toolbar = NavigationToolbar(self.canvas, self)
+        self.verticalLayout.addWidget(self.canvas)
+        self.comboBox_4.activated[str].connect(self.style)
+
+    def style(self,text):
+        sns.set_style(text)
+
+    def plot(self,text):
+        self.figure.clear()
+        self.verticalLayout.addWidget(self.toolbar)
+        self.figure.tight_layout()
+
+        if self.radioButton.isChecked() and self.radioButton_4.isChecked():
+            x = self.lineEdit.text()
+            bins = int(self.lineEdit_4.text())
+            sns.distplot(self.df[x], kde=True, bins = bins)
+        elif self.radioButton.isChecked() and self.radioButton_5.isChecked():
+            x = self.lineEdit.text()
+            bins = int(self.lineEdit_4.text())
+            sns.distplot(self.df[x], kde=False, bins = bins)
+
+        elif self.radioButton_2.isChecked():
+            x = self.lineEdit_2.text()
+            sns.countplot(x=x, data =self.df)
+
+        elif self.radioButton_3.isChecked():
+            self.x =self.lineEdit_3.text()
+            self.y = self.lineEdit_6.text()
+            sns.boxplot(x=self.x, y=self.y, data=self.df, orient='v')
+
+        self.canvas.draw()
+
+app = QApplication(sys.argv)
+window = Visualization()
+window.show()
+app.exec_()
